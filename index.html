@@ -337,6 +337,7 @@ button{font-family:inherit; -webkit-appearance:none; border:none; background:non
   animation:timerPulse 2s ease-in-out infinite;
 }
 .timer-widget.hidden{display:none;}
+.timer-widget.overtime{background:linear-gradient(135deg,#fbc2dd,#f28ba8);}
 @keyframes timerPulse{
   0%,100%{transform:translateX(-50%) scale(1);}
   50%{transform:translateX(-50%) scale(1.05);}
@@ -926,8 +927,10 @@ function screenWrongList(){
    ========================================================================== */
 let timerState = null;
 function formatTimer(sec){
-  const m = Math.floor(sec/60), s = sec%60;
-  return String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
+  const sign = sec<0 ? '+' : '';
+  const abs = Math.abs(sec);
+  const m = Math.floor(abs/60), s = abs%60;
+  return sign+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
 }
 function requestNotifyPermission(){
   try{
@@ -939,10 +942,12 @@ function requestNotifyPermission(){
 function notifyTimerDone(minutes){
   try{
     if('Notification' in window && Notification.permission==='granted'){
-      new Notification('⏰ 学習タイマー終了', {body: minutes+'分の学習おつかれさま！'});
+      new Notification('⏰ '+minutes+'分たったよ', {body: 'キリのいいところで終わってね'});
     }
   }catch(e){}
   try{ if(navigator.vibrate) navigator.vibrate([200,100,200,100,200]); }catch(e){}
+  Sound.clear();
+  toast('⏰ '+minutes+'分たったよ！キリのいいところで終わってね');
 }
 function screenTimerSetup(){
   requestNotifyPermission();
@@ -950,7 +955,7 @@ function screenTimerSetup(){
   render(`
     ${topbar('学習タイマー')}
     <div class="pin-card tilt-l" style="--tape-color:var(--tape-a)">
-      <p>集中する時間を選んでね⏰<br>時間になったら音とバイブでお知らせします。</p>
+      <p>集中する時間を選んでね⏰<br>時間になったらお知らせしますが、終わるタイミングは自分で決めてOK！</p>
     </div>
     <div class="grid">
       ${presets.map(m=>`<div class="tile" onclick="startTimer(${m})"><div class="lv">${m}</div><div class="name">分</div></div>`).join('')}
@@ -965,7 +970,10 @@ function showTimerWidget(){
 function updateTimerWidget(){
   if(!timerState) return;
   const txt = document.getElementById('timer-widget-text');
-  if(txt) txt.textContent = formatTimer(timerState.remainingSec);
+  const remaining = timerState.targetSec - timerState.elapsedSec;
+  if(txt) txt.textContent = formatTimer(remaining);
+  const el = document.getElementById('timer-widget');
+  if(el) el.classList.toggle('overtime', remaining<0);
 }
 function hideTimerWidget(){
   const el = document.getElementById('timer-widget');
@@ -977,55 +985,46 @@ function __openTimerScreen(){
   go(renderTimerRunning, false);
 }
 function startTimer(minutes){
-  timerState = {totalSec:minutes*60, remainingSec:minutes*60, minutes};
+  timerState = {targetSec:minutes*60, elapsedSec:0, minutes, notified:false};
   backStack = [screenHome];
   renderTimerRunning();
   showTimerWidget();
   timerState.intervalId = setInterval(()=>{
     if(!timerState) return;
-    timerState.remainingSec--;
-    if(timerState.remainingSec<=0){ finishTimer(); return; }
+    timerState.elapsedSec++;
+    const remaining = timerState.targetSec - timerState.elapsedSec;
+    if(remaining<=0 && !timerState.notified){
+      timerState.notified = true;
+      notifyTimerDone(timerState.minutes);
+    }
     const el = document.getElementById('timerDisplay');
-    if(el) el.textContent = formatTimer(timerState.remainingSec);
+    if(el){
+      el.textContent = formatTimer(remaining);
+      el.style.color = remaining<0 ? 'var(--coral)' : 'var(--grape-dark)';
+    }
     updateTimerWidget();
   }, 1000);
 }
 function renderTimerRunning(){
+  const remaining = timerState.targetSec - timerState.elapsedSec;
   render(`
     ${topbar(timerState.minutes+'分 集中タイム')}
     <div class="quiz-card" style="margin-top:36px;">
-      <div id="timerDisplay" style="font-size:52px;font-weight:900;color:var(--grape-dark);font-family:var(--font-en);">${formatTimer(timerState.remainingSec)}</div>
-      <div style="color:var(--ink-soft);font-size:13px;">集中して取り組もう🌸</div>
+      <div id="timerDisplay" style="font-size:52px;font-weight:900;color:${remaining<0?'var(--coral)':'var(--grape-dark)'};font-family:var(--font-en);">${formatTimer(remaining)}</div>
+      <div style="color:var(--ink-soft);font-size:13px;">${remaining<0 ? '時間になったよ。キリよく終わろう🌸' : '集中して取り組もう🌸'}</div>
     </div>
     <button class="big-btn tangerine" onclick="stopTimer(true)">⏹ ここで終わる（記録する）</button>
     <button class="big-btn ghost" onclick="stopTimer(false)">✕ 記録せずにやめる</button>
-  `);
-}
-function finishTimer(){
-  clearInterval(timerState.intervalId);
-  const minutes = timerState.minutes;
-  notifyTimerDone(minutes);
-  logStudy(minutes, minutes+'分タイマー', 'timer');
-  Sound.clear();
-  burstConfetti();
-  timerState = null;
-  hideTimerWidget();
-  render(`
-    <div class="hero" style="color:var(--ink);">
-      <h1 style="color:var(--ink);">⏰ 時間になりました！</h1>
-      <p>${minutes}分間おつかれさま🌸</p>
-    </div>
-    <button class="big-btn grape" onclick="go(screenHome)">🏠 ホームへ戻る</button>
   `);
 }
 function stopTimer(record){
   if(!timerState) return;
   clearInterval(timerState.intervalId);
   if(record){
-    const elapsedSec = timerState.totalSec - timerState.remainingSec;
-    const minutes = Math.max(1, Math.round(elapsedSec/60));
-    logStudy(minutes, minutes+'分タイマー（途中終了）', 'timer');
-    toast(minutes+'分を記録したよ');
+    const minutes = Math.max(1, Math.round(timerState.elapsedSec/60));
+    logStudy(minutes, minutes+'分タイマー', 'timer');
+    toast(minutes+'分を記録したよ🌸');
+    burstConfetti();
   }
   timerState = null;
   hideTimerWidget();
@@ -1313,6 +1312,14 @@ function finishQuiz(){
   logStudy(studyMinutes, quizState.label+'（クイズ）', 'quiz');
 
   backStack = [screenHome];
+  const missedWordsList = getWords().filter(w=>quizState.missed.includes(w.no));
+  const missedHtml = missedWordsList.length ? `
+    <div class="section-label">📝 間違えた単語（${missedWordsList.length}語）</div>
+    ${missedWordsList.map(w=>`<div class="wrong-item">
+      <div><div class="w-en">${w.word}</div><div class="w-jp">${w.meaning}</div></div>
+      <div class="w-tag">${w.section}</div>
+    </div>`).join('')}
+  ` : '';
   render(`
     <div class="hero" style="color:var(--ink);">
       <h1 style="color:var(--ink); text-shadow:none;">${quizState.label} の結果</h1>
@@ -1327,6 +1334,7 @@ function finishQuiz(){
       <div class="result-item"><b>${quizState.maxCombo}</b><span>最高コンボ</span></div>
       <div class="result-item"><b>${quizState.skipped||0}</b><span>スキップ数</span></div>
     </div>
+    ${missedHtml}
     ${quizState.missed.length ? `<button class="big-btn tangerine" onclick="reviewMissed()">🔁 間違えた問題を復習</button>` : ''}
     <button class="big-btn grape" onclick="go(screenLevelSelect)">📌 レベル選択へ</button>
     <button class="big-btn ghost" onclick="go(screenHome)">🏠 ホームへ戻る</button>
