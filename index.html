@@ -322,6 +322,26 @@ button{font-family:inherit; -webkit-appearance:none; border:none; background:non
 /* ---------- confetti canvas ---------- */
 #confetti-canvas{position:fixed; inset:0; pointer-events:none; z-index:60;}
 
+/* ---------- 常時表示タイマー ---------- */
+.timer-widget{
+  position:fixed;
+  top:max(14px, env(safe-area-inset-top));
+  left:50%; transform:translateX(-50%);
+  z-index:70;
+  background:linear-gradient(135deg,#c4a5ff,#a78bfa);
+  color:#fff; font-weight:900; font-size:15px;
+  padding:8px 18px; border-radius:24px;
+  box-shadow:0 6px 16px rgba(150,110,170,.35);
+  display:flex; align-items:center; gap:6px;
+  font-family:var(--font-en);
+  animation:timerPulse 2s ease-in-out infinite;
+}
+.timer-widget.hidden{display:none;}
+@keyframes timerPulse{
+  0%,100%{transform:translateX(-50%) scale(1);}
+  50%{transform:translateX(-50%) scale(1.05);}
+}
+
 /* ---------- fab settings ---------- */
 .fab{
   position:fixed; right:16px; bottom:16px; width:52px; height:52px; border-radius:50%;
@@ -339,6 +359,7 @@ button{font-family:inherit; -webkit-appearance:none; border:none; background:non
 <div id="app"></div>
 <div id="toast"></div>
 <canvas id="confetti-canvas"></canvas>
+<button id="timer-widget" class="timer-widget hidden" onclick="__openTimerScreen()">⏰ <span id="timer-widget-text">00:00</span></button>
 
 <script>
 /* ==========================================================================
@@ -361,7 +382,8 @@ const Store = (() => {
       badges:[], titles:[],
       settings:{bgm:true, sfx:true, bgmVol:.5, sfxVol:.7, dark:false},
       wrongBook:[], // list of word no currently missed
-      lastPlayed:null // {level, groupType:'stage'|'genre'|'wrong', groupKey, mode}
+      lastPlayed:null, // {level, groupType:'stage'|'genre'|'wrong', groupKey, mode}
+      studyLog:[] // {date:'YYYY-MM-DD', minutes, label, type:'timer'|'quiz', ts}
     };
   }
   let state = load();
@@ -455,12 +477,14 @@ function getGroupWords(level, groupType, groupKey){
   if(groupType==='stage') return wordsByStage(level, groupKey);
   if(groupType==='genre') return wordsByGenre(level, groupKey);
   if(groupType==='wrong') return getWords().filter(w=>Store.get().wrongBook.includes(w.no));
+  if(groupType==='random') return buildQueue(wordsByLevel(level)).slice(0,20);
   return [];
 }
 function getGroupLabel(groupType, groupKey){
   if(groupType==='stage') return groupKey;
   if(groupType==='genre'){ const g=GENRE_DEFS.find(g=>g.key===groupKey); return g ? g.label : groupKey; }
   if(groupType==='wrong') return '苦手克服';
+  if(groupType==='random') return 'ランダムテスト20';
   return groupKey;
 }
 
@@ -516,6 +540,19 @@ function touchStreak(){
     s.lastStudyDate = today;
     Store.save();
   }
+}
+function localDateStr(d){
+  d = d || new Date();
+  const y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,'0'), day=String(d.getDate()).padStart(2,'0');
+  return `${y}-${m}-${day}`;
+}
+function logStudy(minutes, label, type){
+  if(minutes<=0) return;
+  const s = Store.get();
+  s.studyLog = s.studyLog || [];
+  s.studyLog.push({date: localDateStr(), minutes, label, type, ts: Date.now()});
+  Store.save();
+  touchStreak();
 }
 function awardBadge(id, label){
   const s = Store.get();
@@ -713,6 +750,8 @@ function screenHome(){
     <button class="big-btn grape" onclick="go(screenLevelSelect)">📌 学習をはじめる<small>レベルを選んでスタート</small></button>
     ${s.lastPlayed ? `<button class="big-btn ghost" onclick="resumeLast()">▶️ 前回の続きから<small>${resumeLabelText(s.lastPlayed)}</small></button>`:''}
     <button class="big-btn tangerine" onclick="go(screenWrongOnlyPick)">🔁 苦手克服モード<small>間違えた単語だけ出題（${s.wrongBook.length}語）</small></button>
+    <button class="big-btn leaf" onclick="go(screenTimerSetup)">⏰ 学習タイマー<small>時間を決めて集中する</small></button>
+    <button class="big-btn ghost" onclick="go(screenHistory)">📅 学習の記録<small>勉強した日と時間を確認</small></button>
 
     <div class="section-label">📋 きょうの一言</div>
     <div class="pin-card tilt-l" style="--tape-color:var(--tape-b)"><div style="font-size:14px;">${msg}</div></div>
@@ -765,7 +804,7 @@ function screenLevelSelect(){
   `);
 }
 
-/* ---------------- 学習方法の選択（ステージ順 / 品詞別） ---------------- */
+/* ---------------- 学習方法の選択（ステージ順 / 品詞別 / ランダムテスト） ---------------- */
 function screenStudyPick(level){
   const genreCount = genresWithData(level).length;
   render(`
@@ -777,6 +816,10 @@ function screenStudyPick(level){
     <div class="mode-card" onclick="go(()=>screenGenreSelect(${level}))">
       <div class="ico">🏷️</div>
       <div class="txt"><b>品詞別に学ぶ</b><div>名詞編・動詞編など種類ごとにまとめて復習（${genreCount}ジャンル）</div></div>
+    </div>
+    <div class="mode-card" onclick="go(()=>screenModeSelect(${level}, 'random', 'x'))">
+      <div class="ico">🎲</div>
+      <div class="txt"><b>ランダムテスト20</b><div>レベル${level}の中からランダムに20問</div></div>
     </div>
   `);
 }
@@ -870,6 +913,151 @@ function screenWrongList(){
     <div class="w-tag">${w.section}</div>
   </div>`).join('') || '<p style="text-align:center;color:var(--ink-soft)">なし</p>';
   render(`${topbar('苦手リスト')}${items}`);
+}
+
+/* ==========================================================================
+   学習タイマー
+   ----------------------------------------------------------------------
+   iOS SafariではWebページのままだと（ホーム画面に追加していない限り）
+   本物のプッシュ通知は出せません。そのため、時間になったら
+   ①効果音を鳴らす ②端末を振動させる（対応端末のみ）③画面に大きく表示
+   の3つで確実に気づけるようにしています。あわせてNotification APIも
+   使えそうな場合は試します（対応環境なら通知が出ます）。
+   ========================================================================== */
+let timerState = null;
+function formatTimer(sec){
+  const m = Math.floor(sec/60), s = sec%60;
+  return String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
+}
+function requestNotifyPermission(){
+  try{
+    if('Notification' in window && Notification.permission==='default'){
+      Notification.requestPermission();
+    }
+  }catch(e){}
+}
+function notifyTimerDone(minutes){
+  try{
+    if('Notification' in window && Notification.permission==='granted'){
+      new Notification('⏰ 学習タイマー終了', {body: minutes+'分の学習おつかれさま！'});
+    }
+  }catch(e){}
+  try{ if(navigator.vibrate) navigator.vibrate([200,100,200,100,200]); }catch(e){}
+}
+function screenTimerSetup(){
+  requestNotifyPermission();
+  const presets = [5,10,15,20,30];
+  render(`
+    ${topbar('学習タイマー')}
+    <div class="pin-card tilt-l" style="--tape-color:var(--tape-a)">
+      <p>集中する時間を選んでね⏰<br>時間になったら音とバイブでお知らせします。</p>
+    </div>
+    <div class="grid">
+      ${presets.map(m=>`<div class="tile" onclick="startTimer(${m})"><div class="lv">${m}</div><div class="name">分</div></div>`).join('')}
+    </div>
+  `);
+}
+function showTimerWidget(){
+  const el = document.getElementById('timer-widget');
+  if(el) el.classList.remove('hidden');
+  updateTimerWidget();
+}
+function updateTimerWidget(){
+  if(!timerState) return;
+  const txt = document.getElementById('timer-widget-text');
+  if(txt) txt.textContent = formatTimer(timerState.remainingSec);
+}
+function hideTimerWidget(){
+  const el = document.getElementById('timer-widget');
+  if(el) el.classList.add('hidden');
+}
+function __openTimerScreen(){
+  if(!timerState) return;
+  backStack = [screenHome];
+  go(renderTimerRunning, false);
+}
+function startTimer(minutes){
+  timerState = {totalSec:minutes*60, remainingSec:minutes*60, minutes};
+  backStack = [screenHome];
+  renderTimerRunning();
+  showTimerWidget();
+  timerState.intervalId = setInterval(()=>{
+    if(!timerState) return;
+    timerState.remainingSec--;
+    if(timerState.remainingSec<=0){ finishTimer(); return; }
+    const el = document.getElementById('timerDisplay');
+    if(el) el.textContent = formatTimer(timerState.remainingSec);
+    updateTimerWidget();
+  }, 1000);
+}
+function renderTimerRunning(){
+  render(`
+    ${topbar(timerState.minutes+'分 集中タイム')}
+    <div class="quiz-card" style="margin-top:36px;">
+      <div id="timerDisplay" style="font-size:52px;font-weight:900;color:var(--grape-dark);font-family:var(--font-en);">${formatTimer(timerState.remainingSec)}</div>
+      <div style="color:var(--ink-soft);font-size:13px;">集中して取り組もう🌸</div>
+    </div>
+    <button class="big-btn tangerine" onclick="stopTimer(true)">⏹ ここで終わる（記録する）</button>
+    <button class="big-btn ghost" onclick="stopTimer(false)">✕ 記録せずにやめる</button>
+  `);
+}
+function finishTimer(){
+  clearInterval(timerState.intervalId);
+  const minutes = timerState.minutes;
+  notifyTimerDone(minutes);
+  logStudy(minutes, minutes+'分タイマー', 'timer');
+  Sound.clear();
+  burstConfetti();
+  timerState = null;
+  hideTimerWidget();
+  render(`
+    <div class="hero" style="color:var(--ink);">
+      <h1 style="color:var(--ink);">⏰ 時間になりました！</h1>
+      <p>${minutes}分間おつかれさま🌸</p>
+    </div>
+    <button class="big-btn grape" onclick="go(screenHome)">🏠 ホームへ戻る</button>
+  `);
+}
+function stopTimer(record){
+  if(!timerState) return;
+  clearInterval(timerState.intervalId);
+  if(record){
+    const elapsedSec = timerState.totalSec - timerState.remainingSec;
+    const minutes = Math.max(1, Math.round(elapsedSec/60));
+    logStudy(minutes, minutes+'分タイマー（途中終了）', 'timer');
+    toast(minutes+'分を記録したよ');
+  }
+  timerState = null;
+  hideTimerWidget();
+  screenHome();
+}
+
+/* ---------------- 学習の記録 ---------------- */
+function screenHistory(){
+  const s = Store.get();
+  const log = s.studyLog || [];
+  const groups = {};
+  log.forEach(e=>{ (groups[e.date] = groups[e.date]||[]).push(e); });
+  const dates = Object.keys(groups).sort((a,b)=>b.localeCompare(a));
+  const totalAll = log.reduce((sum,e)=>sum+e.minutes,0);
+  const body = dates.length ? dates.map(d=>{
+    const entries = groups[d];
+    const total = entries.reduce((sum,e)=>sum+e.minutes,0);
+    const items = entries.map(e=>`<div style="font-size:12px;color:var(--ink-soft);margin-top:2px;">・${e.label}（${e.minutes}分）</div>`).join('');
+    return `<div class="pin-card tilt-l" style="--tape-color:var(--tape-c)">
+      <div style="font-weight:800;">${d}　合計 ${total}分</div>
+      ${items}
+    </div>`;
+  }).join('') : '<p style="text-align:center;color:var(--ink-soft);margin-top:20px;">まだ記録がありません</p>';
+  render(`
+    ${topbar('学習の記録')}
+    <div class="stat-row">
+      <div class="stat-chip"><div class="num">${s.streak}</div><div class="lbl">🔥連続日数</div></div>
+      <div class="stat-chip"><div class="num">${s.totalDays}</div><div class="lbl">総学習日数</div></div>
+      <div class="stat-chip"><div class="num">${totalAll}</div><div class="lbl">合計分数</div></div>
+    </div>
+    ${body}
+  `);
 }
 
 /* ==========================================================================
@@ -1121,6 +1309,8 @@ function finishQuiz(){
   if(acc>=95) rank='S'; else if(acc>=85) rank='A'; else if(acc>=70) rank='B'; else if(acc>=50) rank='C';
   const timeSec = Math.round((Date.now()-quizState.startTime)/1000);
   const perfectClear = acc===100;
+  const studyMinutes = Math.max(1, Math.round(timeSec/60));
+  logStudy(studyMinutes, quizState.label+'（クイズ）', 'quiz');
 
   backStack = [screenHome];
   render(`
