@@ -1014,7 +1014,7 @@ function renderSpell(w){
   const decoyCount = 2 + Math.floor(Math.random()*2); // 2〜3個、関係ない文字を混ぜる
   const bankLetters = [...letters, ...randomDecoyLetters(decoyCount)];
   const shuffled = buildQueue(bankLetters.map((c,i)=>({c,i})));
-  quizState.spell = {target, filled:new Array(target.replace(/'/g,'').length).fill(null), bank:shuffled, usedIdx:new Set()};
+  quizState.spell = {target, filled:new Array(target.replace(/'/g,'').length).fill(null), bank:shuffled, usedIdx:new Set(), history:[]};
   render(`
     ${quizTopHtml()}
     <div class="quiz-card">
@@ -1025,8 +1025,9 @@ function renderSpell(w){
     <div class="flash-msg" id="flash"></div>
     <div class="spell-row" id="spellRow"></div>
     <div class="letter-bank" id="letterBank"></div>
-    <div style="text-align:center;margin-top:6px;">
-      <button class="big-btn ghost" style="display:inline-block;width:auto;padding:10px 24px;" onclick="clearSpell()">🔄 やり直す</button>
+    <div style="text-align:center;margin-top:6px;display:flex;gap:8px;justify-content:center;">
+      <button class="big-btn ghost" style="display:inline-block;width:auto;padding:10px 20px;" onclick="deleteLastLetter()">⌫ 1文字消す</button>
+      <button class="big-btn ghost" style="display:inline-block;width:auto;padding:10px 20px;" onclick="clearSpell()">🔄 やり直す</button>
     </div>
     ${skipRowHtml()}
   `);
@@ -1053,6 +1054,16 @@ function pickLetter(bi){
   if(emptyIdx===-1) return;
   st.filled[emptyIdx] = st.bank[bi].c;
   st.usedIdx.add(bi);
+  st.history.push({slotIdx:emptyIdx, bankIdx:bi});
+  Sound.click();
+  renderSpellUI(currentWord());
+}
+function deleteLastLetter(){
+  const st = quizState.spell;
+  if(!st.history || !st.history.length) return;
+  const last = st.history.pop();
+  st.filled[last.slotIdx] = null;
+  st.usedIdx.delete(last.bankIdx);
   Sound.click();
   renderSpellUI(currentWord());
 }
@@ -1060,6 +1071,7 @@ function clearSpell(){
   const st = quizState.spell;
   st.filled = st.filled.map(()=>null);
   st.usedIdx = new Set();
+  st.history = [];
   renderSpellUI(currentWord());
 }
 
